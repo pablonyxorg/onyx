@@ -1,51 +1,61 @@
 # ------------------------------------------------------------
-# Onyx PR Preview (Quick Cloudflare Tunnel, no DNS setup)
+# Onyx PR Preview (Quick Cloudflare Tunnel, default runner)
 # ------------------------------------------------------------
 name: PR Preview
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]   # fire on every push to the PR
-    branches: [main]                         # tweak if you use a different base
+    types: [opened, reopened, synchronize]   # re-run on each push
+    branches: [main]                         # change if your default branch != main
 
 concurrency:
   group: pr-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true                   # stop older runs for same PR
+  cancel-in-progress: true
 
 jobs:
   preview:
-    runs-on: large_runner
-    timeout-minutes: 45                      # hard cap so runners don’t hang
+    runs-on: ubuntu-latest                   # <- FREE 2-core runner
+    timeout-minutes: 45
 
     env:
-      IMAGE_TAG: ci                         # docker images tagged “ci” only
+      IMAGE_TAG: ci
       STACK_NAME: onyx-${{ github.event.pull_request.number }}
 
     steps:
-      # 1. checkout
+      # 1 – checkout repo
       - uses: actions/checkout@v4
 
-      # 2. build images & start the full compose stack (nginx listens on :80)
+      # 2 – free ~10 GB of space (removes Android SDK, tool-cache, apt, etc.)
+      - name: Reclaim disk space
+        uses: jlumbroso/free-disk-space@v1
+        with:
+          tool-cache: true
+          android: true
+          large-packages: true
+
+      # 3 – set up cloudflared (tiny binary)
+      - uses: AnimMouse/setup-cloudflared@v2
+
+      # 4 – build images & start stack (model servers disabled to save GBs)
       - name: Build and start stack
         run: |
           IMAGE_TAG=${IMAGE_TAG} \
+          DISABLE_MODEL_SERVER=true \                               # 👈 skip heavy models
           docker compose -f deployment/docker_compose/docker-compose.dev.yml \
             --project-name ${STACK_NAME} \
-            up -d --build
+            up -d --build \
+            --scale indexing_model_server=0                         # optional extra savings
 
-      # 3. wait for the API to report healthy
+      # 5 – wait for API readiness
       - name: Wait for health check
         run: |
           for i in {1..60}; do
             curl -sf http://localhost:8080/health && exit 0
             echo "not ready yet"; sleep 5
           done
-          echo "Service never became healthy" && exit 1
+          echo "Service never became healthy"; exit 1
 
-      # 4. install cloudflared (tiny helper action, ~10 MB)
-      - uses: AnimMouse/setup-cloudflared@v2
-
-      # 5. launch a *quick* tunnel and capture the random URL
+      # 6 – quick Cloudflare tunnel ➜ grab random URL
       - name: Launch Cloudflare Quick Tunnel
         id: tunnel
         run: |
@@ -61,8 +71,10 @@ jobs:
           done
           [ -n "$url" ] || (echo "Tunnel never returned a URL" && exit 1)
 
-      # 6. comment the live link on the pull-request
+      # 7 – post URL to the pull-request
       - uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
         with:
           script: |
             github.rest.issues.createComment({
@@ -71,10 +83,8 @@ jobs:
               repo: context.repo.repo,
               body: `🌐 **Preview ready:** ${process.env.PREVIEW_URL}`
             })
-        env:
-          PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
 
-      # 7. run Playwright E2E tests against that URL
+      # 8 – Playwright E2E tests against the live preview
       - name: Install Node deps
         working-directory: web
         run: |
@@ -87,7 +97,7 @@ jobs:
           PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
         run: npx playwright test
 
-      # 8. always tear everything down (even if tests failed)
+      # 9 – always tear everything down
       - name: Shutdown stack
         if: always()
         run: |
