@@ -1,12 +1,12 @@
 # ------------------------------------------------------------
-# Onyx PR Preview (Quick Cloudflare Tunnel, default runner)
+# Onyx PR Preview – default runner, no model-server build
 # ------------------------------------------------------------
 name: PR Preview
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]   # re-run on each push
-    branches: [main]                         # change if your default branch != main
+    types: [opened, reopened, synchronize]
+    branches: [main]
 
 concurrency:
   group: pr-preview-${{ github.event.pull_request.number }}
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   preview:
-    runs-on: ubuntu-latest                   # free 2-core runner
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     env:
@@ -22,32 +22,35 @@ jobs:
       STACK_NAME: onyx-${{ github.event.pull_request.number }}
 
     steps:
-    # 1 – checkout repo
+    # 1 ─ checkout
     - uses: actions/checkout@v4
 
-    # 2 – free ~10 GB on the disk
-    - name: Reclaim disk space
-      # 🔧 changed tag: v1 ➜ main (or use v1.3.0)
-      uses: jlumbroso/free-disk-space@main
+    # 2 ─ free ~10 GB
+    - uses: jlumbroso/free-disk-space@main
       with:
         tool-cache: true
         android: true
         large-packages: true
 
-    # 3 – set up cloudflared
-    - uses: AnimMouse/setup-cloudflared@v2
+    # 3 ─ build **only** the two custom images we really need
+    - name: Build API & Web images
+      run: |
+        IMAGE_TAG=${IMAGE_TAG} \
+        docker compose -f deployment/docker_compose/docker-compose.dev.yml \
+          build api_server web_server                         # <─ only these
 
-    # 4 – build images & start stack (model servers turned off)
-    - name: Build and start stack
+    # 4 ─ start the stack but don’t build anything else
+    - name: Start stack
       run: |
         IMAGE_TAG=${IMAGE_TAG} \
         DISABLE_MODEL_SERVER=true \
         docker compose -f deployment/docker_compose/docker-compose.dev.yml \
           --project-name ${STACK_NAME} \
-          up -d --build \
-          --scale indexing_model_server=0   # extra GB saved
+          up -d --no-build \
+          --scale indexing_model_server=0 \
+          --scale inference_model_server=0
 
-    # 5 – wait for health endpoint
+    # 5 ─ wait for API
     - name: Wait for health check
       run: |
         for i in {1..60}; do
@@ -56,7 +59,9 @@ jobs:
         done
         echo "Service never became healthy"; exit 1
 
-    # 6 – quick Cloudflare tunnel → capture random URL
+    # 6 ─ cloudflared quick tunnel
+    - uses: AnimMouse/setup-cloudflared@v2
+
     - name: Launch Cloudflare Quick Tunnel
       id: tunnel
       run: |
@@ -64,15 +69,13 @@ jobs:
         for i in {1..30}; do
           url=$(grep -oE 'https://[0-9a-z-]+\.trycloudflare\.com' cf.log | head -n 1)
           if [ -n "$url" ]; then
-            echo "Found URL: $url"
-            echo "preview_url=$url" >> $GITHUB_OUTPUT
-            break
+            echo "preview_url=$url" >> $GITHUB_OUTPUT; break
           fi
           sleep 2
         done
         [ -n "$url" ] || (echo "Tunnel never returned a URL" && exit 1)
 
-    # 7 – comment the URL on the pull-request
+    # 7 ─ comment URL on PR
     - uses: actions/github-script@v7
       env:
         PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
@@ -85,8 +88,8 @@ jobs:
             body: `🌐 **Preview ready:** ${process.env.PREVIEW_URL}`
           })
 
-    # 8 – Playwright E2E tests
-    - name: Install Node dependencies
+    # 8 ─ Playwright tests
+    - name: Install Node deps
       working-directory: web
       run: |
         npm ci
@@ -98,7 +101,7 @@ jobs:
         PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
       run: npx playwright test
 
-    # 9 – always shut everything down
+    # 9 ─ tidy up
     - name: Shutdown stack
       if: always()
       run: |
