@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   preview:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-large    # or ubuntu-22.04-xlarge
     timeout-minutes: 45                      # hard cap so runners don’t hang
 
     env:
