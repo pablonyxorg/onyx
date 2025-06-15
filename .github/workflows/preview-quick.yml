@@ -96,7 +96,13 @@ jobs:
             body: `🌐 **Preview ready:** ${process.env.PREVIEW_URL}`
           })
 
-    # 8 ─ shut everything down (containers stay up only while this job lives)
+    # 8 ─ keep preview alive
+    - name: Keep preview alive
+      run: |
+        echo "Preview will stay up for 45 min (press CTRL-C to stop)..."
+        sleep 2700          # 45 min
+
+    # 9 ─ shut everything down
     - name: Shutdown stack
       if: always()
       run: |
