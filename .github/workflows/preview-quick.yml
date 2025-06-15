@@ -8,6 +8,11 @@ on:
     types: [opened, reopened, synchronize]
     branches: [main]
 
+permissions:             # 👈 grant just what we need
+  contents: read          # to fetch the code
+  pull-requests: write    # to create the comment
+  issues: write           # (optional) if you ever target issues
+
 concurrency:
   group: pr-preview-${{ github.event.pull_request.number }}
   cancel-in-progress: true
