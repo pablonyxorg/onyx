@@ -156,23 +156,23 @@ def setup_onyx(
             else None
         ),
     )
-    if not success:
-        raise RuntimeError("Could not connect to Vespa within the specified timeout.")
+    # if not success:
+    #     raise RuntimeError("Could not connect to Vespa within the specified timeout.")
 
-    logger.notice(f"Model Server: http://{MODEL_SERVER_HOST}:{MODEL_SERVER_PORT}")
-    if search_settings.provider_type is None:
-        warm_up_bi_encoder(
-            embedding_model=EmbeddingModel.from_db_model(
-                search_settings=search_settings,
-                server_host=MODEL_SERVER_HOST,
-                server_port=MODEL_SERVER_PORT,
-            ),
-        )
+    # logger.notice(f"Model Server: http://{MODEL_SERVER_HOST}:{MODEL_SERVER_PORT}")
+    # if search_settings.provider_type is None:
+    #     warm_up_bi_encoder(
+    #         embedding_model=EmbeddingModel.from_db_model(
+    #             search_settings=search_settings,
+    #             server_host=MODEL_SERVER_HOST,
+    #             server_port=MODEL_SERVER_PORT,
+    #         ),
+    #     )
 
-    # update multipass indexing setting based on GPU availability
-    update_default_multipass_indexing(db_session)
+    # # update multipass indexing setting based on GPU availability
+    # update_default_multipass_indexing(db_session)
 
-    seed_initial_documents(db_session, tenant_id, cohere_enabled)
+    # seed_initial_documents(db_session, tenant_id, cohere_enabled)
 
 
 def translate_saved_search_settings(db_session: Session) -> None:
