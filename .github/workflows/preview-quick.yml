@@ -22,24 +22,22 @@ jobs:
       STACK_NAME: onyx-${{ github.event.pull_request.number }}
 
     steps:
-    # 1 ─ checkout
     - uses: actions/checkout@v4
 
-    # 2 ─ free ~10 GB
     - uses: jlumbroso/free-disk-space@main
       with:
         tool-cache: true
         android: true
         large-packages: true
 
-    # 3 ─ build **only** the two custom images we really need
+    # build only API & web
     - name: Build API & Web images
       run: |
         IMAGE_TAG=${IMAGE_TAG} \
         docker compose -f deployment/docker_compose/docker-compose.dev.yml \
-          build api_server web_server                         # <─ only these
+          build api_server web_server
 
-    # 4 ─ start the stack but don’t build anything else
+    # start stack (skip model servers)
     - name: Start stack
       run: |
         IMAGE_TAG=${IMAGE_TAG} \
@@ -50,16 +48,20 @@ jobs:
           --scale indexing_model_server=0 \
           --scale inference_model_server=0
 
-    # 5 ─ wait for API
-    - name: Wait for health check
+    # ⇣⇣⇣  updated wait step  ⇣⇣⇣
+    - name: Wait for health check (10 min)
       run: |
-        for i in {1..60}; do
-          curl -sf http://localhost:8080/health && exit 0
-          echo "not ready yet"; sleep 5
+        docker logs -f ${STACK_NAME}-api_server-1 &
+        start=$(date +%s)
+        timeout=$((10*60))
+        until curl -sf http://localhost:8080/health; do
+          if [ $(($(date +%s) - start)) -gt $timeout ]; then
+            echo "API still not healthy after 10 min"; exit 1
+          fi
+          sleep 5
         done
-        echo "Service never became healthy"; exit 1
+        echo "✅ health endpoint ready"
 
-    # 6 ─ cloudflared quick tunnel
     - uses: AnimMouse/setup-cloudflared@v2
 
     - name: Launch Cloudflare Quick Tunnel
@@ -68,14 +70,11 @@ jobs:
         nohup cloudflared tunnel --url http://localhost:80 --no-autoupdate > cf.log 2>&1 &
         for i in {1..30}; do
           url=$(grep -oE 'https://[0-9a-z-]+\.trycloudflare\.com' cf.log | head -n 1)
-          if [ -n "$url" ]; then
-            echo "preview_url=$url" >> $GITHUB_OUTPUT; break
-          fi
+          [ -n "$url" ] && { echo "preview_url=$url" >> $GITHUB_OUTPUT; break; }
           sleep 2
         done
         [ -n "$url" ] || (echo "Tunnel never returned a URL" && exit 1)
 
-    # 7 ─ comment URL on PR
     - uses: actions/github-script@v7
       env:
         PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
@@ -88,7 +87,6 @@ jobs:
             body: `🌐 **Preview ready:** ${process.env.PREVIEW_URL}`
           })
 
-    # 8 ─ Playwright tests
     - name: Install Node deps
       working-directory: web
       run: |
@@ -101,7 +99,6 @@ jobs:
         PREVIEW_URL: ${{ steps.tunnel.outputs.preview_url }}
       run: npx playwright test
 
-    # 9 ─ tidy up
     - name: Shutdown stack
       if: always()
       run: |
